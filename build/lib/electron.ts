@@ -100,12 +100,12 @@ function darwinBundleDocumentTypes(types: { [name: string]: string | string[] },
 	});
 }
 
-const { msBuildId } = util.getElectronVersion();
-const electronVersion = '42.2.0';
+// const { msBuildId } = util.getElectronVersion();
+const electronVersion = '42.3.3';
 
 export const config = {
 	version: electronVersion,
-	tag: product.electronRepository ? `v${electronVersion}-${msBuildId}` : undefined,
+	tag: `v${electronVersion}`,
 	productAppName: product.nameLong,
 	companyName: 'Microsoft Corporation',
 	copyright: 'Copyright (C) 2026 Microsoft. All rights reserved',
@@ -203,7 +203,7 @@ export const config = {
 	linuxExecutableName: product.applicationName,
 	winIcon: 'resources/win32/code.ico',
 	token: process.env['GITHUB_TOKEN'],
-	repo: product.electronRepository || undefined,
+	repo: undefined,
 	validateChecksum: true,
 	checksumFile: path.join(root, 'build', 'checksums', 'electron.txt'),
 	createVersionedResources: useVersionedUpdate,
