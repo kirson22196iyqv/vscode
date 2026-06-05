@@ -784,6 +784,7 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 		// selections in `state.config.values`; ensure we hold a refcounted
 		// subscription on it so the rest of the handler observes those.
 		const provisionalBackend = this._provisionalService.get(request.sessionResource);
+		this._logService.info(`[AgentHost] _invokeAgent resolvedSession=${sessionKey} provisional=${!!provisionalBackend}`);
 		if (provisionalBackend) {
 			this._ensureSessionSubscription(sessionKey);
 		}
@@ -793,7 +794,9 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 		// open with hydrated state. Use the unmanaged accessor to peek
 		// without taking a fresh subscription, which would trigger a
 		// duplicate snapshot fetch and (in tests) unrelated mock behaviour.
+		this._logService.info(`[AgentHost] _invokeAgent awaiting _readEagerlyCreatedSessionState for ${sessionKey}`);
 		const existingState = await this._readEagerlyCreatedSessionState(resolvedSession, cancellationToken);
+		this._logService.info(`[AgentHost] _invokeAgent _readEagerlyCreatedSessionState returned existingState=${!!existingState} for ${sessionKey}`);
 
 		if (!existingState) {
 			// Eager-create did not produce server-side state (e.g. no
@@ -801,7 +804,9 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 			// folder-pick time, or this session was created via a legacy/
 			// test path). Fall back to the original create-then-subscribe
 			// flow.
+			this._logService.info(`[AgentHost] _invokeAgent awaiting _createAndSubscribe for ${sessionKey}`);
 			await this._createAndSubscribe(request.sessionResource, this._createModelSelection(request.userSelectedModelId, request.modelConfiguration), undefined, request.agentHostSessionConfig);
+			this._logService.info(`[AgentHost] _invokeAgent _createAndSubscribe completed for ${sessionKey}`);
 		} else {
 			// Eager-created session: take a refcounted subscription so the
 			// handler observes state changes for the duration of the chat
@@ -827,9 +832,12 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 			}
 
 			this._ensureActiveClientForMessage(resolvedSession);
+			this._logService.info(`[AgentHost] _invokeAgent eager-state path wired up for ${sessionKey}`);
 		}
 
+		this._logService.info(`[AgentHost] _invokeAgent awaiting _handleTurn for ${sessionKey}`);
 		const completedTurn = await this._handleTurn(resolvedSession, request, progress, cancellationToken);
+		this._logService.info(`[AgentHost] _invokeAgent _handleTurn returned completedTurn=${!!completedTurn} for ${sessionKey}`);
 		const details = this._getTurnResponseDetails(request.sessionResource, resolvedSession, completedTurn);
 
 		return details ? { details } : {};
@@ -851,9 +859,11 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 	private async _readEagerlyCreatedSessionState(resolvedSession: URI, token: CancellationToken): Promise<SessionState | undefined> {
 		const sub = this._config.connection.getSubscriptionUnmanaged(StateComponents.Session, resolvedSession);
 		if (!sub) {
+			this._logService.info(`[AgentHost] _readEagerlyCreatedSessionState: no unmanaged subscription for ${resolvedSession.toString()}`);
 			return undefined;
 		}
 		if (sub.value === undefined) {
+			this._logService.info(`[AgentHost] _readEagerlyCreatedSessionState: snapshot in flight, awaiting hydration for ${resolvedSession.toString()}`);
 			// Snapshot is in flight. Attach the listener before re-checking
 			// to close a race where the snapshot lands between the value
 			// read and the listener attachment.
@@ -871,6 +881,7 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 			});
 		}
 		const value = sub.value;
+		this._logService.info(`[AgentHost] _readEagerlyCreatedSessionState: ${value === undefined ? 'undefined' : value instanceof Error ? `error(${value.message})` : 'state'} cancelled=${token.isCancellationRequested} for ${resolvedSession.toString()}`);
 		return (value && !(value instanceof Error)) ? value : undefined;
 	}
 
@@ -1129,13 +1140,16 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 		cancellationToken: CancellationToken,
 	): Promise<Turn | undefined> {
 		if (cancellationToken.isCancellationRequested) {
+			this._logService.info(`[AgentHost] _handleTurn: cancelled before start for ${session.toString()}`);
 			return;
 		}
 
 		const turnId = request.requestId;
 		this._clientDispatchedTurnIds.add(turnId);
+		this._logService.info(`[AgentHost] _handleTurn: entered turnId=${turnId} session=${session.toString()}`);
 		const messageAttachments = await this._convertVariablesToAttachments(request);
 		if (cancellationToken.isCancellationRequested) {
+			this._logService.info(`[AgentHost] _handleTurn: cancelled after variable conversion for turnId=${turnId}`);
 			return;
 		}
 
@@ -1199,6 +1213,7 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 			turnId,
 			message: userOriginMessage(request.message, messageAttachments),
 		};
+		this._logService.info(`[AgentHost] _handleTurn: dispatching session/turnStarted turnId=${turnId}`);
 		this._config.connection.dispatch(session.toString(), turnAction);
 
 		// Ensure the snapshot controller records a sentinel checkpoint for this
@@ -2528,7 +2543,7 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 		const workingDirectory = this._resolveRequestedWorkingDirectory(sessionResource);
 		const requestedSession = fork ? undefined : this._resolveSessionUri(sessionResource);
 
-		this._logService.trace(`[AgentHost] Creating new session, model=${model?.id ?? '(default)'}, provider=${this._config.provider}${fork ? `, fork from ${fork.session.toString()} at index ${fork.turnIndex}` : ''}`);
+		this._logService.info(`[AgentHost] _createAndSubscribe: model=${model?.id ?? '(default)'}, provider=${this._config.provider}, workingDirectory=${workingDirectory ?? '(none)'}${fork ? `, fork from ${fork.session.toString()} at index ${fork.turnIndex}` : ''}`);
 
 		// Eagerly authenticate before creating the session if the agent
 		// declares required protected resources. This avoids a wasted
@@ -2547,6 +2562,7 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 
 		let session: URI;
 		try {
+			this._logService.info(`[AgentHost] _createAndSubscribe: awaiting createSession for ${requestedSession?.toString() ?? '(new)'}`);
 			session = await this._config.connection.createSession({
 				session: requestedSession,
 				model,
@@ -2556,7 +2572,9 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 				config,
 				activeClient,
 			});
+			this._logService.info(`[AgentHost] _createAndSubscribe: createSession resolved to ${session.toString()}`);
 		} catch (err) {
+			this._logService.info(`[AgentHost] _createAndSubscribe: createSession failed: ${err instanceof Error ? err.message : String(err)}`);
 			// If authentication is required (e.g. token expired), try interactive auth and retry once
 			if (this._isAuthRequiredError(err) && this._config.resolveAuthentication) {
 				this._logService.info('[AgentHost] Authentication required, prompting user...');
@@ -2583,11 +2601,12 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 			throw new Error(`Agent host returned unexpected session URI. Expected ${requestedSession.toString()}, got ${session.toString()}`);
 		}
 
-		this._logService.trace(`[AgentHost] Created session: ${session.toString()}`);
+		this._logService.info(`[AgentHost] _createAndSubscribe: subscribing to ${session.toString()}`);
 
 		// Subscribe to the new session's state
 		const newSub = this._ensureSessionSubscription(session.toString());
 		if (!this._getSessionState(session.toString())) {
+			this._logService.info(`[AgentHost] _createAndSubscribe: awaiting subscription hydration for ${session.toString()}`);
 			// Wait for the subscription to hydrate. Attach the listener
 			// before re-checking the value to close a race where another
 			// consumer (e.g. the chat-input picker) acquires the same
@@ -2601,6 +2620,7 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 					resolve();
 				}
 			});
+			this._logService.info(`[AgentHost] _createAndSubscribe: subscription hydrated for ${session.toString()}`);
 		}
 
 		// Start syncing the chat model's pending requests to the protocol
